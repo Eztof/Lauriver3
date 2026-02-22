@@ -25,6 +25,7 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.storage.Storage
 import io.github.jan.supabase.storage.storage
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -265,7 +266,7 @@ fun UpdateScreen() {
                                             if (!path.isNullOrBlank()) {
                                                 val signedUrl = supabase.storage
                                                     .from("apk-releases")
-                                                    .createSignedUrl(path, expiresIn = 300)
+                                                    .createSignedUrl(path, expiresIn = 300.seconds)
                                                 downloadApk(context, signedUrl, latest.versionName)
                                             } else if (!latest.apkUrl.isNullOrBlank()) {
                                                 downloadApk(context, latest.apkUrl!!, latest.versionName)
