@@ -44,9 +44,7 @@ fun calculateGrades1to6(maxPoints: Int): List<GradeRange> {
     }
 }
 
-// Oberstufe: 15=95–100%, 14=90–94%, 13=85–89%, 12=80–84%, 11=75–79%, 10=70–74%,
-//  9=65–69%, 8=60–64%, 7=55–59%, 6=50–54%, 5=45–49%, 4=40–44%,
-//  3=33–39%, 2=27–32%, 1=20–26%, 0=0–19%
+// Oberstufe: 15=95–100%, 14=90–94%, ... 0=0–19%
 fun calculateGrades0to15(maxPoints: Int): List<GradeRange> {
     data class Def(val grade: String, val minPct: Double, val maxPct: Double, val color: Color)
     val defs = listOf(
@@ -84,12 +82,7 @@ fun GradeCalculatorScreen() {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("📝 Notenrechner", fontSize = 26.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 4.dp))
-        Text("NRW Notenspiegel", fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 16.dp))
-
+        // Schulsystem wählen
         Row(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("1-6" to "Klasse 1–10", "0-15" to "Oberstufe").forEach { (key, label) ->
