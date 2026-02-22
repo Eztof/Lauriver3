@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,7 +33,15 @@ fun MainApp() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Lauriver 💕") },
+                title = {
+                    Text(
+                        when (selectedTab) {
+                            0 -> "📝 Notenrechner"
+                            1 -> "🗑️ Müllkalender"
+                            else -> "Lauriver 💕"
+                        }
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -45,9 +54,14 @@ fun MainApp() {
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
                     icon = { Icon(Icons.Default.School, contentDescription = null) },
-                    label = { Text("Notenrechner") }
+                    label = { Text("Noten") }
                 )
-                // Weitere Tabs können hier hinzugefügt werden
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
+                    label = { Text("Müll") }
+                )
             }
         },
         modifier = Modifier.fillMaxSize()
@@ -55,6 +69,7 @@ fun MainApp() {
         Box(modifier = Modifier.padding(innerPadding)) {
             when (selectedTab) {
                 0 -> GradeCalculatorScreen()
+                1 -> WasteCalendarScreen()
             }
         }
     }
