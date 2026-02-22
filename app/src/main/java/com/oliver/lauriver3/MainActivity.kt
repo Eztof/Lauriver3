@@ -2,7 +2,6 @@ package com.oliver.lauriver3
 
 import android.app.DownloadManager
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -24,6 +23,8 @@ import com.oliver.lauriver3.ui.theme.Lauriver3Theme
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.storage.Storage
+import io.github.jan.supabase.storage.storage
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -34,26 +35,31 @@ data class AppVersion(
     val id: Int = 0,
     @SerialName("version_code") val versionCode: Int,
     @SerialName("version_name") val versionName: String,
-    @SerialName("apk_url") val apkUrl: String,
+    // apk_storage_path = Pfad im Supabase Storage Bucket "apk-releases", z.B. "lauriver-1.1.apk"
+    // apk_url = direkte externe URL (Fallback / Alternative)
+    @SerialName("apk_storage_path") val apkStoragePath: String? = null,
+    @SerialName("apk_url") val apkUrl: String? = null,
     @SerialName("release_notes") val releaseNotes: String? = null
 )
 
-// --- Supabase Client ---
+// --- Supabase Client (mit Storage) ---
 val supabase = createSupabaseClient(
     supabaseUrl = SupabaseConfig.URL,
     supabaseKey = SupabaseConfig.ANON_KEY
 ) {
     install(Postgrest)
+    install(Storage)
 }
 
 // --- Navigations-Einträge ---
 sealed class NavItem(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    data object Grades   : NavItem("Notenrechner", Icons.Default.School)
-    data object Waste    : NavItem("Müllkalender", Icons.Default.DateRange)
-    data object Update   : NavItem("App-Update",   Icons.Default.SystemUpdate)
+    data object Grades     : NavItem("Notenrechner",  Icons.Default.School)
+    data object Waste      : NavItem("Müllkalender",  Icons.Default.DateRange)
+    data object Milestones : NavItem("Meilensteine",  Icons.Default.Favorite)
+    data object Update     : NavItem("App-Update",    Icons.Default.SystemUpdate)
 }
 
-val navItems = listOf(NavItem.Grades, NavItem.Waste, NavItem.Update)
+val navItems = listOf(NavItem.Grades, NavItem.Waste, NavItem.Milestones, NavItem.Update)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,9 +128,10 @@ fun MainApp() {
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
                 when (selected) {
-                    NavItem.Grades -> GradeCalculatorScreen()
-                    NavItem.Waste  -> WasteCalendarScreen()
-                    NavItem.Update -> UpdateScreen()
+                    NavItem.Grades     -> GradeCalculatorScreen()
+                    NavItem.Waste      -> WasteCalendarScreen()
+                    NavItem.Milestones -> MilestonesScreen()
+                    NavItem.Update     -> UpdateScreen()
                 }
             }
         }
@@ -168,13 +175,14 @@ fun UpdateScreen() {
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Top
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(Icons.Default.SystemUpdate, contentDescription = null,
+        Icon(
+            Icons.Default.SystemUpdate,
+            contentDescription = null,
             modifier = Modifier.size(64.dp).padding(bottom = 16.dp),
-            tint = MaterialTheme.colorScheme.primary)
-
+            tint = MaterialTheme.colorScheme.primary
+        )
         Text("App-Update", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -192,68 +200,89 @@ fun UpdateScreen() {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (isLoading) {
-            CircularProgressIndicator()
-            Text("Prüfe auf Updates...", modifier = Modifier.padding(top = 8.dp))
-        } else if (error != null) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(error!!, modifier = Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.onErrorContainer)
+        when {
+            isLoading -> {
+                CircularProgressIndicator()
+                Text("Prüfe auf Updates...", modifier = Modifier.padding(top = 8.dp))
             }
-        } else if (latestVersion != null) {
-            val latest = latestVersion!!
-            val hasUpdate = latest.versionCode > currentVersionCode
+            error != null -> {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(error!!, modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+            latestVersion != null -> {
+                val latest = latestVersion!!
+                val hasUpdate = latest.versionCode > currentVersionCode
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (hasUpdate)
-                        MaterialTheme.colorScheme.primaryContainer
-                    else
-                        MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (hasUpdate) Icons.Default.NewReleases else Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = if (hasUpdate) MaterialTheme.colorScheme.primary
-                                   else MaterialTheme.colorScheme.tertiary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            if (hasUpdate) "Update verfügbar!" else "App ist aktuell ✓",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Neueste Version: ${latest.versionName} (${latest.versionCode})",
-                        fontSize = 14.sp)
-                    if (!latest.releaseNotes.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Was ist neu:", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                        Text(latest.releaseNotes, fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-
-                    if (hasUpdate && latest.apkUrl.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = {
-                                downloadApk(context, latest.apkUrl, latest.versionName)
-                                downloadStarted = true
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !downloadStarted
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (hasUpdate)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (hasUpdate) Icons.Default.NewReleases else Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = if (hasUpdate) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.tertiary
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (downloadStarted) "Download läuft..." else "Jetzt herunterladen")
+                            Text(
+                                if (hasUpdate) "Update verfügbar!" else "App ist aktuell ✓",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Neueste Version: ${latest.versionName} (${latest.versionCode})",
+                            fontSize = 14.sp)
+                        if (!latest.releaseNotes.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("Was ist neu:", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                            Text(latest.releaseNotes, fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (hasUpdate) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        downloadStarted = true
+                                        try {
+                                            // Supabase Storage hat Priorität
+                                            val path = latest.apkStoragePath
+                                            if (!path.isNullOrBlank()) {
+                                                val signedUrl = supabase.storage
+                                                    .from("apk-releases")
+                                                    .createSignedUrl(path, expiresIn = 300)
+                                                downloadApk(context, signedUrl, latest.versionName)
+                                            } else if (!latest.apkUrl.isNullOrBlank()) {
+                                                downloadApk(context, latest.apkUrl!!, latest.versionName)
+                                            }
+                                        } catch (e: Exception) {
+                                            error = "Download fehlgeschlagen: ${e.message?.take(60)}"
+                                            downloadStarted = false
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !downloadStarted
+                            ) {
+                                Icon(Icons.Default.Download, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(if (downloadStarted) "Download läuft..." else "Jetzt herunterladen")
+                            }
                         }
                     }
                 }
@@ -261,41 +290,13 @@ fun UpdateScreen() {
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
         OutlinedButton(
-            onClick = {
-                downloadStarted = false
-                checkForUpdate()
-            },
+            onClick = { downloadStarted = false; checkForUpdate() },
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Default.Refresh, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Erneut prüfen")
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Info-Box
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            )
-        ) {
-            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-                Icon(Icons.Default.Info, contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Updates werden über Supabase verwaltet. " +
-                    "Neue Versionen können direkt in der Datenbank " +
-                    "(Tabelle: app_version) eingetragen werden.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
     }
 }
