@@ -181,16 +181,9 @@ fun RecipesScreen() {
             full = full,
             context = context,
             onDismiss = { editRecipe = null },
-            onSave = { updatedFull ->
-                scope.launch {
-                    try {
-                        saveFullRecipe(updatedFull, context, isNew = false)
-                        editRecipe = null
-                        load()
-                    } catch (e: Exception) {
-                        error = e.message?.take(100)
-                    }
-                }
+            onSave = {
+                editRecipe = null
+                load()
             }
         )
         return
@@ -202,16 +195,9 @@ fun RecipesScreen() {
             full = null,
             context = context,
             onDismiss = { showAddSheet = false },
-            onSave = { full ->
-                scope.launch {
-                    try {
-                        saveFullRecipe(full, context, isNew = true)
-                        showAddSheet = false
-                        load()
-                    } catch (e: Exception) {
-                        error = e.message?.take(100)
-                    }
-                }
+            onSave = {
+                showAddSheet = false
+                load()
             }
         )
         return
@@ -701,7 +687,7 @@ fun RecipeEditDialog(
     context: Context,
     sourceType: String = full?.recipe?.sourceType ?: "manual",
     onDismiss: () -> Unit,
-    onSave: (FullRecipe) -> Unit
+    onSave: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val isNew = full == null
@@ -999,24 +985,41 @@ fun RecipeEditDialog(
                 }
 
                 // Speichern
+                var saveError by remember { mutableStateOf<String?>(null) }
+                var isSaving by remember { mutableStateOf(false) }
+
+                if (saveError != null) {
+                    Text(
+                        saveError!!,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                }
+
                 HorizontalDivider()
                 Row(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp).fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss) { Text("Abbrechen") }
+                    TextButton(onClick = onDismiss, enabled = !isSaving) { Text("Abbrechen") }
                     Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = {
+                            saveError = null
+                            isSaving = true
                             val tags = tagsText.split(",")
                                 .map { it.trim() }
                                 .filter { it.isNotEmpty() }
-                            val recipeId = full?.recipe?.id ?: UUID.randomUUID().toString()
+                            val recipeId = full?.recipe?.id?.takeIf { it.isNotBlank() }
+                                ?: UUID.randomUUID().toString()
+                            val isNew = full == null
                             val newRecipe = Recipe(
                                 id = recipeId,
                                 title = title.trim(),
                                 description = description.trim().ifBlank { null },
-                                sourceType = sourceType,
+                                sourceType = if (imageUrl.isNotBlank()) "screenshot" else "manual",
                                 imageUrl = imageUrl.trim().ifBlank { null },
                                 servings = servings.toIntOrNull() ?: 2,
                                 prepTimeMin = prepTime.toIntOrNull(),
@@ -1043,10 +1046,27 @@ fun RecipeEditDialog(
                                         description = step.description.trim()
                                     )
                                 }
-                            onSave(FullRecipe(newRecipe, newIngredients, newSteps))
+                            scope.launch {
+                                try {
+                                    saveFullRecipe(
+                                        FullRecipe(newRecipe, newIngredients, newSteps),
+                                        context,
+                                        isNew = isNew
+                                    )
+                                    isSaving = false
+                                    onSave()
+                                } catch (e: Exception) {
+                                    saveError = "Fehler: ${e.message?.take(80)}"
+                                    isSaving = false
+                                }
+                            }
                         },
-                        enabled = title.isNotBlank() && !isUploading
+                        enabled = title.isNotBlank() && !isUploading && !isSaving
                     ) {
+                        if (isSaving) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
                         Text("Speichern")
                     }
                 }
