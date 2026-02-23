@@ -54,6 +54,9 @@ dependencies {
     implementation(libs.supabase.storage)
     implementation(libs.ktor.client.android)
 
+    // Coil – Bilder laden (Rezept-Screenshots)
+    implementation(libs.coil.compose)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

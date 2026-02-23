@@ -1,10 +1,7 @@
 package com.oliver.lauriver3
 
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -28,6 +25,7 @@ import com.oliver.lauriver3.ui.theme.Lauriver3Theme
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.storage.Storage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,16 +49,24 @@ val supabase = createSupabaseClient(
     supabaseKey = SupabaseConfig.ANON_KEY
 ) {
     install(Postgrest)
+    install(Storage)
 }
 
 sealed class NavItem(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     data object Grades     : NavItem("Notenrechner",  Icons.Default.School)
     data object Waste      : NavItem("Müllkalender",  Icons.Default.DateRange)
     data object Milestones : NavItem("Meilensteine",  Icons.Default.Favorite)
+    data object Recipes    : NavItem("Rezepte",       Icons.Default.MenuBook)
     data object Update     : NavItem("App-Update",    Icons.Default.SystemUpdate)
 }
 
-val navItems = listOf(NavItem.Grades, NavItem.Waste, NavItem.Milestones, NavItem.Update)
+val navItems = listOf(
+    NavItem.Grades,
+    NavItem.Waste,
+    NavItem.Milestones,
+    NavItem.Recipes,
+    NavItem.Update
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -148,6 +154,7 @@ fun MainApp() {
                         onDismissLegend = { showWasteLegend = false }
                     )
                     NavItem.Milestones -> MilestonesScreen()
+                    NavItem.Recipes    -> RecipesScreen()
                     NavItem.Update     -> UpdateScreen()
                 }
             }
@@ -178,7 +185,6 @@ fun UpdateScreen() {
     var downloadState by remember { mutableStateOf(DownloadState.IDLE) }
     var downloadProgress by remember { mutableStateOf(0f) }
 
-    // Prüfen ob "Unbekannte Quellen" erlaubt ist – nach jedem Resume neu prüfen
     var canInstallUnknown by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -187,7 +193,6 @@ fun UpdateScreen() {
         )
     }
 
-    // Neu prüfen wenn der Screen rekomposiert wird (z.B. nach Rückkehr aus Einstellungen)
     LaunchedEffect(downloadState) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             canInstallUnknown = context.packageManager.canRequestPackageInstalls()
@@ -216,7 +221,6 @@ fun UpdateScreen() {
             downloadState = DownloadState.DOWNLOADING
             downloadProgress = 0f
             try {
-                // APK in internen Cache laden – FileProvider hat hier garantierten Zugriff
                 val apkFile = File(context.cacheDir, "lauriver-update-$versionCode.apk")
 
                 withContext(Dispatchers.IO) {
@@ -246,7 +250,6 @@ fun UpdateScreen() {
                     connection.disconnect()
                 }
 
-                // Prüfen ob die Datei eine echte APK ist (fängt mit "PK" = ZIP-Header)
                 val header = apkFile.inputStream().use { it.readNBytes(2) }
                 if (header.size < 2 || header[0] != 0x50.toByte() || header[1] != 0x4B.toByte()) {
                     apkFile.delete()
@@ -283,7 +286,6 @@ fun UpdateScreen() {
         Text("App-Update", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Installierte Version
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -306,7 +308,6 @@ fun UpdateScreen() {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Warnung: Berechtigung fehlt
         if (!canInstallUnknown) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -425,7 +426,6 @@ fun UpdateScreen() {
                                 DownloadState.IDLE -> {
                                     Button(
                                         onClick = {
-                                            // Berechtigung nochmal aktuell prüfen
                                             canInstallUnknown = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                                                 context.packageManager.canRequestPackageInstalls()
                                             else true
@@ -529,9 +529,6 @@ fun UpdateScreen() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// APK installieren via FileProvider – direkt aus internem Cache
-// ---------------------------------------------------------------------------
 fun installApk(context: Context, file: File) {
     val uri = FileProvider.getUriForFile(
         context,
