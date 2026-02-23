@@ -15,7 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
@@ -24,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -38,16 +39,15 @@ import java.util.*
 // --- Datenmodell ---
 enum class WasteType(
     val label: String,
-    val emoji: String,
     val color: Color,
     val channelId: String
 ) {
-    RESTMUELL_2W("Restmüll (2-wöchentlich)", "🗑️", Color(0xFF424242), "restmuell_2w"),
-    RESTMUELL_4W_BLAU("Restmüll blauer Deckel (4-wöchentlich)", "🔵", Color(0xFF1565C0), "restmuell_4w_blau"),
-    RESTMUELL_4W_GELB("Restmüll gelber Deckel (4-wöchentlich)", "🟡", Color(0xFFF9A825), "restmuell_4w_gelb"),
-    BIO("Biotonne", "🌱", Color(0xFF2E7D32), "bio"),
-    PAPIER("Altpapier", "📰", Color(0xFF1565C0), "papier"),
-    LEICHTSTOFF("Leichtstoff (Gelber Sack)", "♻️", Color(0xFFF57F17), "leichtstoff"),
+    RESTMUELL_2W("Restmüll (2-wöchentlich)", Color(0xFF616161), "restmuell_2w"),
+    RESTMUELL_4W_BLAU("Restmüll blauer Deckel (4-wöchentlich)", Color(0xFF1565C0), "restmuell_4w_blau"),
+    RESTMUELL_4W_GELB("Restmüll gelber Deckel (4-wöchentlich)", Color(0xFFF9A825), "restmuell_4w_gelb"),
+    BIO("Biotonne", Color(0xFF2E7D32), "bio"),
+    PAPIER("Altpapier", Color(0xFF1976D2), "papier"),
+    LEICHTSTOFF("Leichtstoff (Gelber Sack)", Color(0xFFF57F17), "leichtstoff"),
 }
 
 data class WasteEvent(val date: LocalDate, val type: WasteType)
@@ -105,7 +105,7 @@ val WASTE_EVENTS: List<WasteEvent> by lazy {
         e("20261118", WasteType.BIO), e("20261202", WasteType.BIO),
         e("20261216", WasteType.BIO), e("20261230", WasteType.BIO),
 
-        // Altpapier (gleiche Termine wie Biotonne)
+        // Altpapier
         e("20260114", WasteType.PAPIER), e("20260128", WasteType.PAPIER),
         e("20260211", WasteType.PAPIER), e("20260225", WasteType.PAPIER),
         e("20260311", WasteType.PAPIER), e("20260325", WasteType.PAPIER),
@@ -150,14 +150,13 @@ fun createNotificationChannels(context: Context) {
 class WasteNotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val label = intent.getStringExtra("label") ?: return
-        val emoji = intent.getStringExtra("emoji") ?: ""
         val channelId = intent.getStringExtra("channelId") ?: return
         val notifId = intent.getIntExtra("notifId", 0)
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("$emoji Morgen: $label")
+            .setContentTitle("Morgen: $label")
             .setContentText("Tonne bis 6:00 Uhr an den Straßenrand stellen!")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
@@ -178,7 +177,6 @@ fun scheduleNotifications(context: Context, events: List<WasteEvent>) {
         }
         val intent = Intent(context, WasteNotificationReceiver::class.java).apply {
             putExtra("label", event.type.label)
-            putExtra("emoji", event.type.emoji)
             putExtra("channelId", event.type.channelId)
             putExtra("notifId", (event.date.toString() + event.type.name).hashCode())
         }
@@ -210,6 +208,21 @@ fun cancelAllNotifications(context: Context, events: List<WasteEvent>) {
     }
 }
 
+// --- Farb-Legende ---
+@Composable
+fun WasteColorDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 // --- UI ---
 @Composable
 fun WasteCalendarScreen() {
@@ -238,14 +251,12 @@ fun WasteCalendarScreen() {
         }
     }
 
-    // Nächste + zukünftige Termine
     val upcoming = remember {
         WASTE_EVENTS.filter { !it.date.isBefore(today) }
             .groupBy { it.date }
             .toSortedMap()
     }
 
-    // Nächster Termin
     val nextDate = upcoming.keys.firstOrNull()
     val daysUntilNext = nextDate?.let { java.time.temporal.ChronoUnit.DAYS.between(today, it) } ?: -1
 
@@ -259,18 +270,24 @@ fun WasteCalendarScreen() {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         when (daysUntilNext.toInt()) {
-                            0 -> "🚨 Heute wird abgeholt!"
-                            1 -> "⚠️ Morgen wird abgeholt!"
-                            else -> "📅 Nächste Abholung in $daysUntilNext Tagen"
+                            0 -> "Heute wird abgeholt!"
+                            1 -> "Morgen wird abgeholt!"
+                            else -> "Nächste Abholung in $daysUntilNext Tagen"
                         },
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
                     Text(nextDate.format(germanFmt), fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     upcoming[nextDate]?.forEach { event ->
-                        Text("${event.type.emoji} ${event.type.label}", fontSize = 13.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 2.dp)) {
+                            Box(modifier = Modifier.size(12.dp).clip(CircleShape)
+                                .background(event.type.color))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(event.type.label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
                     }
                 }
             }
@@ -309,7 +326,24 @@ fun WasteCalendarScreen() {
             )
         }
 
-        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+
+        // Farblegende
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text("Legende", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp))
+                WasteType.entries.forEach { type ->
+                    WasteColorDot(type.color, type.label)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Liste aller Termine
         LazyColumn(
@@ -330,9 +364,11 @@ fun WasteCalendarScreen() {
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(
-                                if (isToday) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
-                                else if (isTomorrow) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                when {
+                                    isToday -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                                    isTomorrow -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                },
                                 RoundedCornerShape(10.dp)
                             )
                             .padding(12.dp)
@@ -348,18 +384,16 @@ fun WasteCalendarScreen() {
                         events.forEach { event ->
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(vertical = 2.dp)
+                                modifier = Modifier.padding(vertical = 3.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(10.dp)
-                                        .background(event.type.color, RoundedCornerShape(3.dp))
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(event.type.color)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "${event.type.emoji} ${event.type.label}",
-                                    fontSize = 14.sp
-                                )
+                                Text(event.type.label, fontSize = 14.sp)
                             }
                         }
                     }

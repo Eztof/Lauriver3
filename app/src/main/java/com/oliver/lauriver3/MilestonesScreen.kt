@@ -1,6 +1,5 @@
 package com.oliver.lauriver3
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -40,7 +38,6 @@ data class Milestone(
     @SerialName("created_at") val createdAt: String? = null
 )
 
-// Vordefinierte Emoji-Auswahl
 val MILESTONE_EMOJIS = listOf(
     "💕", "💋", "💍", "🥂", "✈️", "🏡", "🎂", "🌹",
     "💑", "🌍", "🎉", "⭐", "🌙", "☀️", "🐾", "🎵"
@@ -126,12 +123,9 @@ fun MilestonesScreen() {
             }
         }
 
-        // FAB
         FloatingActionButton(
             onClick = { showAddDialog = true },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(20.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
             containerColor = MaterialTheme.colorScheme.primary
         ) {
             Icon(Icons.Default.Add, contentDescription = "Meilenstein hinzufügen",
@@ -139,7 +133,6 @@ fun MilestonesScreen() {
         }
     }
 
-    // Hinzufügen-Dialog
     if (showAddDialog) {
         AddMilestoneDialog(
             onDismiss = { showAddDialog = false },
@@ -157,7 +150,6 @@ fun MilestonesScreen() {
         )
     }
 
-    // Löschen-Dialog
     deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
@@ -188,19 +180,16 @@ fun MilestonesScreen() {
 @Composable
 fun MilestoneCard(milestone: Milestone, today: LocalDate, onDelete: () -> Unit) {
     val date = runCatching { LocalDate.parse(milestone.date) }.getOrNull() ?: return
-    val germanFmt = DateTimeFormatter.ofPattern("dd. MMMM yyyy", Locale.GERMAN)
+    val germanFmt = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.GERMAN)
 
-    // Countdown: Nächstes Jubiläum
-    val thisYear = date.withYear(today.year)
-    val nextAnniversary = if (!thisYear.isBefore(today)) thisYear else thisYear.plusYears(1)
-    val daysUntil = ChronoUnit.DAYS.between(today, nextAnniversary)
-    val yearsAgo = ChronoUnit.YEARS.between(date, today).toInt()
+    // Tage seit dem Datum (absolut, nicht Jubiläums-Countdown)
+    val totalDays = ChronoUnit.DAYS.between(date, today)
+    val isFuture = totalDays < 0
 
-    // Farbe basierend auf Nähe
     val cardColor = when {
-        daysUntil == 0L -> MaterialTheme.colorScheme.primaryContainer
-        daysUntil <= 7  -> MaterialTheme.colorScheme.secondaryContainer
-        else            -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        totalDays == 0L -> MaterialTheme.colorScheme.primaryContainer
+        !isFuture && totalDays % 365 < 7 -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     }
 
     Card(
@@ -229,30 +218,31 @@ fun MilestoneCard(milestone: Milestone, today: LocalDate, onDelete: () -> Unit) 
                 Text(milestone.title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Text(date.format(germanFmt), fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (!milestone.note.isNullOrBlank()) {
-                    Text(milestone.note, fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp))
-                }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Countdown-Bereich
+            // Tage-Anzeige
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 when {
-                    daysUntil == 0L -> {
+                    totalDays == 0L -> {
                         Text("🎉", fontSize = 22.sp)
                         Text("Heute!", fontSize = 11.sp, fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary)
                     }
-                    daysUntil == 1L -> {
-                        Text("⭐", fontSize = 22.sp)
-                        Text("Morgen", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    isFuture -> {
+                        Text(
+                            "in ${-totalDays}",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Text("Tagen", fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     else -> {
                         Text(
-                            daysUntil.toString(),
+                            totalDays.toString(),
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -260,14 +250,6 @@ fun MilestoneCard(milestone: Milestone, today: LocalDate, onDelete: () -> Unit) 
                         Text("Tage", fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                }
-                if (yearsAgo > 0) {
-                    Text(
-                        "vor ${yearsAgo} J.",
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
                 }
 
                 IconButton(
@@ -291,7 +273,6 @@ fun AddMilestoneDialog(
 ) {
     var title by remember { mutableStateOf("") }
     var selectedEmoji by remember { mutableStateOf("💕") }
-    var note by remember { mutableStateOf("") }
     var dateText by remember { mutableStateOf("") }
     var dateError by remember { mutableStateOf(false) }
     val germanInputFmt = DateTimeFormatter.ofPattern("dd.MM.yyyy")
@@ -338,16 +319,6 @@ fun AddMilestoneDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Notiz (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
                 Spacer(modifier = Modifier.height(20.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -367,8 +338,7 @@ fun AddMilestoneDialog(
                                 Milestone(
                                     title = title.trim(),
                                     emoji = selectedEmoji,
-                                    date = parsedDate.toString(),
-                                    note = note.trim().ifBlank { null }
+                                    date = parsedDate.toString()
                                 )
                             )
                         },
@@ -384,37 +354,27 @@ fun AddMilestoneDialog(
 
 @Composable
 fun LazyEmojiRow(emojis: List<String>, selected: String, onSelect: (String) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // Zwei Zeilen à 8
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(emojis.take(8), emojis.drop(8)).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    row.forEach { emoji ->
-                        val isSelected = emoji == selected
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer
-                                    else Color.Transparent
-                                )
-                                .then(
-                                    if (!isSelected) Modifier
-                                    else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        listOf(emojis.take(8), emojis.drop(8)).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                row.forEach { emoji ->
+                    val isSelected = emoji == selected
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                                else Color.Transparent
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TextButton(
+                            onClick = { onSelect(emoji) },
+                            modifier = Modifier.size(36.dp),
+                            contentPadding = PaddingValues(0.dp)
                         ) {
-                            TextButton(
-                                onClick = { onSelect(emoji) },
-                                modifier = Modifier.size(36.dp),
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text(emoji, fontSize = 20.sp, textAlign = TextAlign.Center)
-                            }
+                            Text(emoji, fontSize = 20.sp, textAlign = TextAlign.Center)
                         }
                     }
                 }
