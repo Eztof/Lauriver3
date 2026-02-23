@@ -196,9 +196,10 @@ fun RecipesScreen() {
         return
     }
 
-    // Add-Sheet
+    // Neu-Eingabe: direkt zum Editor
     if (showAddSheet) {
-        RecipeAddSheet(
+        RecipeEditDialog(
+            full = null,
             context = context,
             onDismiss = { showAddSheet = false },
             onSave = { full ->
@@ -288,16 +289,11 @@ fun RecipesScreen() {
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = { load() }) { Text("Erneut versuchen") }
                 }
-                filtered.isEmpty() -> Column(
+                filtered.isEmpty() -> Box(
                     Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("🍽️", fontSize = 56.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Noch keine Rezepte", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("Füge dein erstes Rezept hinzu!",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🍽️", fontSize = 64.sp)
                 }
                 else -> LazyColumn(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
@@ -695,83 +691,6 @@ fun MetaChip(label: String, value: String) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hinzufügen-Sheet: Auswahl Screenshot vs. Manuell
-// ─────────────────────────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun RecipeAddSheet(
-    context: Context,
-    onDismiss: () -> Unit,
-    onSave: (FullRecipe) -> Unit
-) {
-    var mode by remember { mutableStateOf<String?>(null) } // "screenshot" or "manual"
-
-    if (mode == null) {
-        Dialog(onDismissRequest = onDismiss) {
-            Card(shape = RoundedCornerShape(20.dp)) {
-                Column(modifier = Modifier.padding(24.dp)) {
-                    Text("Rezept hinzufügen", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(Modifier.height(20.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        // Screenshot
-                        Card(
-                            onClick = { mode = "screenshot" },
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text("📸", fontSize = 36.sp)
-                                Spacer(Modifier.height(8.dp))
-                                Text("Screenshot", fontWeight = FontWeight.Bold, fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer)
-                                Text("Von Instagram hochladen", fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            }
-                        }
-                        // Manuell
-                        Card(
-                            onClick = { mode = "manual" },
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text("✍️", fontSize = 36.sp)
-                                Spacer(Modifier.height(8.dp))
-                                Text("Manuell", fontWeight = FontWeight.Bold, fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer)
-                                Text("Selbst eingeben", fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                        Text("Abbrechen")
-                    }
-                }
-            }
-        }
-    } else {
-        RecipeEditDialog(
-            full = null,
-            context = context,
-            sourceType = mode!!,
-            onDismiss = onDismiss,
-            onSave = onSave
-        )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Bearbeiten / Neu-Eingabe Dialog
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -878,7 +797,7 @@ fun RecipeEditDialog(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     // Bild-Bereich
-                    if (sourceType == "screenshot" || imageUrl.isNotBlank()) {
+                    if (true) {
                         Column {
                             Text("Bild", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             Spacer(Modifier.height(6.dp))
@@ -913,7 +832,7 @@ fun RecipeEditDialog(
                                             Icon(Icons.Default.AddPhotoAlternate, null,
                                                 modifier = Modifier.size(32.dp))
                                             Spacer(Modifier.height(4.dp))
-                                            Text("Screenshot auswählen")
+                                            Text("Bild auswählen")
                                         }
                                     }
                                 }
