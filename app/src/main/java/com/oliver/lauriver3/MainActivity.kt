@@ -1,10 +1,15 @@
 package com.oliver.lauriver3
 
 import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.oliver.lauriver3.ui.theme.Lauriver3Theme
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
@@ -26,10 +32,8 @@ import io.github.jan.supabase.postgrest.from
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.io.File
 
-// ---------------------------------------------------------------------------
-// Datenmodell – nur noch versionCode, versionName, apk_url, release_notes
-// ---------------------------------------------------------------------------
 @Serializable
 data class AppVersion(
     val id: Int = 0,
@@ -39,9 +43,6 @@ data class AppVersion(
     @SerialName("release_notes") val releaseNotes: String? = null
 )
 
-// ---------------------------------------------------------------------------
-// Supabase Client (kein Storage mehr nötig)
-// ---------------------------------------------------------------------------
 val supabase = createSupabaseClient(
     supabaseUrl = SupabaseConfig.URL,
     supabaseKey = SupabaseConfig.ANON_KEY
@@ -49,9 +50,6 @@ val supabase = createSupabaseClient(
     install(Postgrest)
 }
 
-// ---------------------------------------------------------------------------
-// Navigation
-// ---------------------------------------------------------------------------
 sealed class NavItem(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     data object Grades     : NavItem("Notenrechner",  Icons.Default.School)
     data object Waste      : NavItem("Müllkalender",  Icons.Default.DateRange)
@@ -162,7 +160,6 @@ fun UpdateScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Versionscode direkt aus dem installierten APK lesen – vollautomatisch
     val currentVersionCode = remember {
         try {
             @Suppress("DEPRECATION")
@@ -173,13 +170,23 @@ fun UpdateScreen() {
     var latestVersion by remember { mutableStateOf<AppVersion?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    var downloadStarted by remember { mutableStateOf(false) }
+
+    // Download-Status
+    var downloadState by remember { mutableStateOf(DownloadState.IDLE) }
+    var downloadId by remember { mutableStateOf(-1L) }
+
+    // Prüfen ob "Unbekannte Quellen" erlaubt ist
+    val canInstallUnknown = remember(downloadState) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.packageManager.canRequestPackageInstalls()
+        } else true
+    }
 
     fun checkForUpdate() {
         scope.launch {
             isLoading = true
             error = null
-            downloadStarted = false
+            downloadState = DownloadState.IDLE
             try {
                 val versions = supabase.from("app_version")
                     .select()
@@ -190,6 +197,44 @@ fun UpdateScreen() {
             }
             isLoading = false
         }
+    }
+
+    // BroadcastReceiver: wenn Download fertig → sofort Install-Intent öffnen
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                val completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+                if (completedId != downloadId) return
+
+                val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val query = DownloadManager.Query().setFilterById(completedId)
+                val cursor = dm.query(query)
+                if (cursor.moveToFirst()) {
+                    val statusCol = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                    if (statusCol >= 0 && cursor.getInt(statusCol) == DownloadManager.STATUS_SUCCESSFUL) {
+                        val uriCol = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+                        if (uriCol >= 0) {
+                            val localUri = cursor.getString(uriCol)
+                            val file = File(Uri.parse(localUri).path ?: "")
+                            installApk(ctx, file)
+                            downloadState = DownloadState.DONE
+                        }
+                    } else {
+                        downloadState = DownloadState.FAILED
+                    }
+                }
+                cursor.close()
+            }
+        }
+
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(receiver, filter)
+        }
+
+        onDispose { context.unregisterReceiver(receiver) }
     }
 
     LaunchedEffect(Unit) { checkForUpdate() }
@@ -210,7 +255,7 @@ fun UpdateScreen() {
         Text("App-Update", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Installierte Version (automatisch erkannt)
+        // Installierte Version
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -225,16 +270,53 @@ fun UpdateScreen() {
                 Column {
                     Text("Installierte Version", fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        "Version $currentVersionCode",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Version $currentVersionCode", fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold)
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
+
+        // Hinweis: "Unbekannte Quellen" nicht erlaubt
+        if (!canInstallUnknown) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Warning, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Installation aus unbekannten Quellen nicht erlaubt",
+                            fontWeight = FontWeight.Medium, fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.tertiary
+                        )
+                    ) {
+                        Text("Berechtigung erteilen →")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
         when {
             isLoading -> {
@@ -248,8 +330,7 @@ fun UpdateScreen() {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
+                        containerColor = MaterialTheme.colorScheme.errorContainer)
                 ) {
                     Row(modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically) {
@@ -265,6 +346,8 @@ fun UpdateScreen() {
             latestVersion != null -> {
                 val latest = latestVersion!!
                 val hasUpdate = latest.versionCode > currentVersionCode
+                val hasUrl = !latest.apkUrl.isNullOrBlank() &&
+                             !latest.apkUrl.contains("PLACEHOLDER")
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -287,77 +370,85 @@ fun UpdateScreen() {
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 if (hasUpdate) "Update verfügbar!" else "App ist aktuell ✓",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
+                                fontWeight = FontWeight.Bold, fontSize = 16.sp
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Neueste Version: ${latest.versionCode}",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("Neueste Version: ${latest.versionCode}", fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                         if (!latest.releaseNotes.isNullOrBlank()) {
                             Spacer(modifier = Modifier.height(10.dp))
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            HorizontalDivider()
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text("Was ist neu:", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                latest.releaseNotes,
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(latest.releaseNotes, fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
 
-                        if (hasUpdate) {
+                        if (hasUpdate && hasUrl) {
                             Spacer(modifier = Modifier.height(14.dp))
-
-                            val hasUrl = !latest.apkUrl.isNullOrBlank() &&
-                                         latest.apkUrl != "https://drive.google.com/uc?export=download&id=PLACEHOLDER"
-
-                            if (hasUrl) {
-                                Button(
-                                    onClick = {
-                                        downloadStarted = true
-                                        downloadApk(
-                                            context = context,
-                                            url = latest.apkUrl!!,
-                                            versionCode = latest.versionCode
+                            when (downloadState) {
+                                DownloadState.IDLE -> {
+                                    Button(
+                                        onClick = {
+                                            downloadState = DownloadState.DOWNLOADING
+                                            downloadId = startDownload(
+                                                context, latest.apkUrl!!, latest.versionCode
+                                            )
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = canInstallUnknown
+                                    ) {
+                                        Icon(Icons.Default.Download, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Version ${latest.versionCode} herunterladen")
+                                    }
+                                    if (!canInstallUnknown) {
+                                        Text(
+                                            "Bitte erst die Berechtigung oben erteilen.",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(top = 4.dp)
                                         )
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !downloadStarted
-                                ) {
-                                    Icon(Icons.Default.Download, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        if (downloadStarted) "Download läuft..."
-                                        else "Version ${latest.versionCode} herunterladen"
-                                    )
+                                    }
                                 }
-                                if (downloadStarted) {
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                DownloadState.DOWNLOADING -> {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text("Wird heruntergeladen...", fontSize = 14.sp)
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        "Der Download läuft im Hintergrund. Nach dem Download die APK in den Benachrichtigungen antippen und installieren.",
+                                        "Die Installation startet automatisch wenn der Download fertig ist.",
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                            } else {
-                                // Noch keine URL hinterlegt
-                                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                                    Row(modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.HourglassEmpty,
+                                DownloadState.DONE -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.CheckCircle,
                                             contentDescription = null,
-                                            modifier = Modifier.size(18.dp),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            tint = MaterialTheme.colorScheme.tertiary)
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Download-Link noch nicht verfügbar.",
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("Download abgeschlossen – Installer geöffnet.",
+                                            fontSize = 14.sp)
+                                    }
+                                }
+                                DownloadState.FAILED -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Error, contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Download fehlgeschlagen.", fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.error)
                                     }
                                 }
                             }
@@ -379,10 +470,12 @@ fun UpdateScreen() {
     }
 }
 
+enum class DownloadState { IDLE, DOWNLOADING, DONE, FAILED }
+
 // ---------------------------------------------------------------------------
-// APK-Download via Android DownloadManager
+// Download starten – gibt die DownloadManager-ID zurück
 // ---------------------------------------------------------------------------
-fun downloadApk(context: Context, url: String, versionCode: Int) {
+fun startDownload(context: Context, url: String, versionCode: Int): Long {
     val request = DownloadManager.Request(Uri.parse(url)).apply {
         setTitle("Lauriver Update – Version $versionCode")
         setDescription("APK wird heruntergeladen...")
@@ -394,8 +487,23 @@ fun downloadApk(context: Context, url: String, versionCode: Int) {
             "lauriver-$versionCode.apk"
         )
         setMimeType("application/vnd.android.package-archive")
-        // Google Drive braucht keinen speziellen Header
     }
     val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-    dm.enqueue(request)
+    return dm.enqueue(request)
+}
+
+// ---------------------------------------------------------------------------
+// APK installieren via FileProvider (funktioniert ab Android 7+)
+// ---------------------------------------------------------------------------
+fun installApk(context: Context, file: File) {
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.provider",
+        file
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/vnd.android.package-archive")
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+    }
+    context.startActivity(intent)
 }
