@@ -30,20 +30,16 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-// --- Supabase Datenmodell ---
 @Serializable
 data class AppVersion(
     val id: Int = 0,
     @SerialName("version_code") val versionCode: Int,
     @SerialName("version_name") val versionName: String,
-    // apk_storage_path = Pfad im Supabase Storage Bucket "apk-releases", z.B. "lauriver-1.1.apk"
-    // apk_url = direkte externe URL (Fallback / Alternative)
     @SerialName("apk_storage_path") val apkStoragePath: String? = null,
     @SerialName("apk_url") val apkUrl: String? = null,
     @SerialName("release_notes") val releaseNotes: String? = null
 )
 
-// --- Supabase Client (mit Storage) ---
 val supabase = createSupabaseClient(
     supabaseUrl = SupabaseConfig.URL,
     supabaseKey = SupabaseConfig.ANON_KEY
@@ -52,7 +48,6 @@ val supabase = createSupabaseClient(
     install(Storage)
 }
 
-// --- Navigations-Einträge ---
 sealed class NavItem(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     data object Grades     : NavItem("Notenrechner",  Icons.Default.School)
     data object Waste      : NavItem("Müllkalender",  Icons.Default.DateRange)
@@ -81,6 +76,9 @@ fun MainApp() {
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf<NavItem>(NavItem.Grades) }
 
+    // Legende-State für Müllkalender – wird von TopAppBar-Button und Screen geteilt
+    var showWasteLegend by remember { mutableStateOf(false) }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -101,6 +99,8 @@ fun MainApp() {
                         selected = selected == item,
                         onClick = {
                             selected = item
+                            // Legende schließen beim Tab-Wechsel
+                            showWasteLegend = false
                             scope.launch { drawerState.close() }
                         },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
@@ -118,6 +118,18 @@ fun MainApp() {
                             Icon(Icons.Default.Menu, contentDescription = "Menü")
                         }
                     },
+                    actions = {
+                        // Info-Button nur im Müllkalender
+                        if (selected == NavItem.Waste) {
+                            IconButton(onClick = { showWasteLegend = true }) {
+                                Icon(
+                                    Icons.Default.Info,
+                                    contentDescription = "Legende",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer,
                         titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -130,7 +142,10 @@ fun MainApp() {
             Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
                 when (selected) {
                     NavItem.Grades     -> GradeCalculatorScreen()
-                    NavItem.Waste      -> WasteCalendarScreen()
+                    NavItem.Waste      -> WasteCalendarScreen(
+                        showLegend = showWasteLegend,
+                        onDismissLegend = { showWasteLegend = false }
+                    )
                     NavItem.Milestones -> MilestonesScreen()
                     NavItem.Update     -> UpdateScreen()
                 }
@@ -187,7 +202,6 @@ fun UpdateScreen() {
         Text("App-Update", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Aktuelle Version
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -208,9 +222,7 @@ fun UpdateScreen() {
             }
             error != null -> {
                 Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(error!!, modifier = Modifier.padding(16.dp),
@@ -224,10 +236,8 @@ fun UpdateScreen() {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (hasUpdate)
-                            MaterialTheme.colorScheme.primaryContainer
-                        else
-                            MaterialTheme.colorScheme.surfaceVariant
+                        containerColor = if (hasUpdate) MaterialTheme.colorScheme.primaryContainer
+                                         else MaterialTheme.colorScheme.surfaceVariant
                     )
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -241,13 +251,11 @@ fun UpdateScreen() {
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 if (hasUpdate) "Update verfügbar!" else "App ist aktuell ✓",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
+                                fontWeight = FontWeight.Bold, fontSize = 16.sp
                             )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Neueste Version: ${latest.versionName} (${latest.versionCode})",
-                            fontSize = 14.sp)
+                        Text("Neueste Version: ${latest.versionName} (${latest.versionCode})", fontSize = 14.sp)
                         if (!latest.releaseNotes.isNullOrBlank()) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("Was ist neu:", fontWeight = FontWeight.Medium, fontSize = 13.sp)
@@ -261,7 +269,6 @@ fun UpdateScreen() {
                                     scope.launch {
                                         downloadStarted = true
                                         try {
-                                            // Supabase Storage hat Priorität
                                             val path = latest.apkStoragePath
                                             if (!path.isNullOrBlank()) {
                                                 val signedUrl = supabase.storage

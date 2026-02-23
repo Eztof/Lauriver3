@@ -36,7 +36,6 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.*
 
-// --- Datenmodell ---
 enum class WasteType(
     val label: String,
     val color: Color,
@@ -52,13 +51,11 @@ enum class WasteType(
 
 data class WasteEvent(val date: LocalDate, val type: WasteType)
 
-// --- Alle Termine aus der ICS-Datei (Langenkamp 2026) ---
 val WASTE_EVENTS: List<WasteEvent> by lazy {
     val fmt = DateTimeFormatter.ofPattern("yyyyMMdd")
     fun e(dateStr: String, type: WasteType) = WasteEvent(LocalDate.parse(dateStr, fmt), type)
 
     listOf(
-        // Restmüll 2-wöchentlich
         e("20260107", WasteType.RESTMUELL_2W), e("20260121", WasteType.RESTMUELL_2W),
         e("20260204", WasteType.RESTMUELL_2W), e("20260218", WasteType.RESTMUELL_2W),
         e("20260304", WasteType.RESTMUELL_2W), e("20260318", WasteType.RESTMUELL_2W),
@@ -73,7 +70,6 @@ val WASTE_EVENTS: List<WasteEvent> by lazy {
         e("20261111", WasteType.RESTMUELL_2W), e("20261125", WasteType.RESTMUELL_2W),
         e("20261209", WasteType.RESTMUELL_2W), e("20261222", WasteType.RESTMUELL_2W),
 
-        // Restmüll 4-wöchentlich blauer Deckel
         e("20260107", WasteType.RESTMUELL_4W_BLAU), e("20260204", WasteType.RESTMUELL_4W_BLAU),
         e("20260304", WasteType.RESTMUELL_4W_BLAU), e("20260331", WasteType.RESTMUELL_4W_BLAU),
         e("20260429", WasteType.RESTMUELL_4W_BLAU), e("20260528", WasteType.RESTMUELL_4W_BLAU),
@@ -82,7 +78,6 @@ val WASTE_EVENTS: List<WasteEvent> by lazy {
         e("20261014", WasteType.RESTMUELL_4W_BLAU), e("20261111", WasteType.RESTMUELL_4W_BLAU),
         e("20261209", WasteType.RESTMUELL_4W_BLAU), e("20261222", WasteType.RESTMUELL_4W_BLAU),
 
-        // Restmüll 4-wöchentlich gelber Deckel
         e("20260121", WasteType.RESTMUELL_4W_GELB), e("20260218", WasteType.RESTMUELL_4W_GELB),
         e("20260318", WasteType.RESTMUELL_4W_GELB), e("20260415", WasteType.RESTMUELL_4W_GELB),
         e("20260513", WasteType.RESTMUELL_4W_GELB), e("20260610", WasteType.RESTMUELL_4W_GELB),
@@ -90,7 +85,6 @@ val WASTE_EVENTS: List<WasteEvent> by lazy {
         e("20260902", WasteType.RESTMUELL_4W_GELB), e("20260930", WasteType.RESTMUELL_4W_GELB),
         e("20261028", WasteType.RESTMUELL_4W_GELB), e("20261125", WasteType.RESTMUELL_4W_GELB),
 
-        // Biotonne
         e("20260114", WasteType.BIO), e("20260128", WasteType.BIO),
         e("20260211", WasteType.BIO), e("20260225", WasteType.BIO),
         e("20260311", WasteType.BIO), e("20260325", WasteType.BIO),
@@ -105,7 +99,6 @@ val WASTE_EVENTS: List<WasteEvent> by lazy {
         e("20261118", WasteType.BIO), e("20261202", WasteType.BIO),
         e("20261216", WasteType.BIO), e("20261230", WasteType.BIO),
 
-        // Altpapier
         e("20260114", WasteType.PAPIER), e("20260128", WasteType.PAPIER),
         e("20260211", WasteType.PAPIER), e("20260225", WasteType.PAPIER),
         e("20260311", WasteType.PAPIER), e("20260325", WasteType.PAPIER),
@@ -120,7 +113,6 @@ val WASTE_EVENTS: List<WasteEvent> by lazy {
         e("20261118", WasteType.PAPIER), e("20261202", WasteType.PAPIER),
         e("20261216", WasteType.PAPIER), e("20261230", WasteType.PAPIER),
 
-        // Leichtstoff / Gelber Sack
         e("20260115", WasteType.LEICHTSTOFF), e("20260212", WasteType.LEICHTSTOFF),
         e("20260312", WasteType.LEICHTSTOFF), e("20260410", WasteType.LEICHTSTOFF),
         e("20260507", WasteType.LEICHTSTOFF), e("20260605", WasteType.LEICHTSTOFF),
@@ -131,28 +123,23 @@ val WASTE_EVENTS: List<WasteEvent> by lazy {
     ).sortedBy { it.date }
 }
 
-// --- Notification-Kanal erstellen ---
 fun createNotificationChannels(context: Context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         WasteType.entries.forEach { type ->
             val channel = NotificationChannel(
-                type.channelId,
-                type.label,
-                NotificationManager.IMPORTANCE_DEFAULT
+                type.channelId, type.label, NotificationManager.IMPORTANCE_DEFAULT
             ).apply { description = "Erinnerungen für ${type.label}" }
             nm.createNotificationChannel(channel)
         }
     }
 }
 
-// --- BroadcastReceiver für Benachrichtigungen ---
 class WasteNotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val label = intent.getStringExtra("label") ?: return
         val channelId = intent.getStringExtra("channelId") ?: return
         val notifId = intent.getIntExtra("notifId", 0)
-
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -165,11 +152,9 @@ class WasteNotificationReceiver : BroadcastReceiver() {
     }
 }
 
-// --- Benachrichtigungen planen (Abend davor, 19:00 Uhr) ---
 fun scheduleNotifications(context: Context, events: List<WasteEvent>) {
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     val today = LocalDate.now()
-
     events.filter { it.date > today }.forEach { event ->
         val cal = Calendar.getInstance().apply {
             set(event.date.year, event.date.monthValue - 1, event.date.dayOfMonth - 1, 19, 0, 0)
@@ -187,9 +172,8 @@ fun scheduleNotifications(context: Context, events: List<WasteEvent>) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         if (cal.timeInMillis > System.currentTimeMillis()) {
-            try {
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi)
-            } catch (_: Exception) {}
+            try { alarmManager.setExact(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi) }
+            catch (_: Exception) {}
         }
     }
 }
@@ -208,24 +192,40 @@ fun cancelAllNotifications(context: Context, events: List<WasteEvent>) {
     }
 }
 
-// --- Farb-Legende ---
+// --- Legende als AlertDialog ---
 @Composable
-fun WasteColorDot(color: Color, label: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-        Box(
-            modifier = Modifier
-                .size(14.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+fun WasteLegendDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Farblegende", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                WasteType.entries.forEach { type ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(type.color)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(type.label, fontSize = 14.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Schließen") }
+        }
+    )
 }
 
-// --- UI ---
+// --- Haupt-Screen ---
 @Composable
-fun WasteCalendarScreen() {
+fun WasteCalendarScreen(
+    showLegend: Boolean = false,
+    onDismissLegend: () -> Unit = {}
+) {
     val context = LocalContext.current
     val today = LocalDate.now()
     val germanFmt = DateTimeFormatter.ofPattern("EEE, dd.MM.", Locale.GERMAN)
@@ -260,6 +260,11 @@ fun WasteCalendarScreen() {
     val nextDate = upcoming.keys.firstOrNull()
     val daysUntilNext = nextDate?.let { java.time.temporal.ChronoUnit.DAYS.between(today, it) } ?: -1
 
+    // Legende-Dialog
+    if (showLegend) {
+        WasteLegendDialog(onDismiss = onDismissLegend)
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         // Header Banner
         if (nextDate != null) {
@@ -274,17 +279,17 @@ fun WasteCalendarScreen() {
                             1 -> "Morgen wird abgeholt!"
                             else -> "Nächste Abholung in $daysUntilNext Tagen"
                         },
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
+                        fontWeight = FontWeight.Bold, fontSize = 16.sp
                     )
                     Text(nextDate.format(germanFmt), fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onPrimaryContainer)
                     Spacer(modifier = Modifier.height(6.dp))
                     upcoming[nextDate]?.forEach { event ->
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(vertical = 2.dp)) {
-                            Box(modifier = Modifier.size(12.dp).clip(CircleShape)
-                                .background(event.type.color))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        ) {
+                            Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(event.type.color))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(event.type.label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         }
@@ -293,7 +298,7 @@ fun WasteCalendarScreen() {
             }
         }
 
-        // Notification Toggle
+        // Erinnerungen
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -328,24 +333,7 @@ fun WasteCalendarScreen() {
 
         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 
-        // Farblegende
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text("Legende", fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 4.dp))
-                WasteType.entries.forEach { type ->
-                    WasteColorDot(type.color, type.label)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Liste aller Termine
+        // Terminliste
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
@@ -375,8 +363,7 @@ fun WasteCalendarScreen() {
                     ) {
                         Text(
                             dayLabel,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold, fontSize = 15.sp,
                             color = if (isToday) MaterialTheme.colorScheme.error
                                     else MaterialTheme.colorScheme.onSurface
                         )

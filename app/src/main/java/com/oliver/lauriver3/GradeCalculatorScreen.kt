@@ -1,7 +1,6 @@
 package com.oliver.lauriver3
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,6 +26,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 @Serializable
 data class GradeConfigEntry(
@@ -44,7 +44,6 @@ data class GradeRange(
     val color: Color
 )
 
-// Farbpaletten
 val COLORS_1_6 = listOf(
     Color(0xFF1B5E20), Color(0xFF388E3C), Color(0xFF9E9D24),
     Color(0xFFF57F17), Color(0xFFE65100), Color(0xFFC62828)
@@ -101,11 +100,9 @@ fun GradeCalculatorScreen() {
     var selectedSystem by remember { mutableStateOf("1-6") }
     var gradeRanges by remember { mutableStateOf<List<GradeRange>>(emptyList()) }
 
-    // Konfiguration aus Supabase
     var config1_6 by remember { mutableStateOf(DEFAULT_CONFIG_1_6) }
     var config0_15 by remember { mutableStateOf(DEFAULT_CONFIG_0_15) }
     var showConfigDialog by remember { mutableStateOf(false) }
-    var configLoading by remember { mutableStateOf(true) }
 
     fun loadConfig() {
         scope.launch {
@@ -118,7 +115,6 @@ fun GradeCalculatorScreen() {
                 if (c16.isNotEmpty()) config1_6 = c16
                 if (c015.isNotEmpty()) config0_15 = c015
             } catch (_: Exception) {}
-            configLoading = false
         }
     }
 
@@ -131,7 +127,6 @@ fun GradeCalculatorScreen() {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Schulsystem wählen – visuell eindeutig
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -232,7 +227,6 @@ fun GradeCalculatorScreen() {
         }
     }
 
-    // Konfigurations-Dialog
     if (showConfigDialog) {
         GradeConfigDialog(
             config = currentConfig,
@@ -241,13 +235,11 @@ fun GradeCalculatorScreen() {
             onSave = { newConfig ->
                 scope.launch {
                     try {
-                        // Alle alten Einträge löschen und neue einfügen
                         supabase.from("grade_config")
                             .delete { filter { eq("system_type", selectedSystem) } }
                         supabase.from("grade_config").insert(newConfig)
                         if (selectedSystem == "1-6") config1_6 = newConfig
                         else config0_15 = newConfig
-                        // Neu berechnen falls schon berechnet
                         val max = maxPointsText.toIntOrNull()
                         if (max != null && gradeRanges.isNotEmpty()) {
                             gradeRanges = configToRanges(newConfig, max, currentColors)
@@ -285,82 +277,124 @@ fun GradeConfigDialog(
     onSave: (List<GradeConfigEntry>) -> Unit,
     onReset: () -> Unit
 ) {
-    // Editierbare Kopie: minPct als String
-    val editableMin = remember { config.map { mutableStateOf("${"%.0f".format(it.minPct * 100)}") }.toMutableList() }
-    var hasError by remember { mutableStateOf(false) }
+    // Slider-Werte in ganzen Prozent (0..100)
+    val sliderValues = remember {
+        config.map { mutableFloatStateOf((it.minPct * 100).roundToInt().toFloat()) }
+    }
+    val colors = if (systemType == "1-6") COLORS_1_6 else COLORS_0_15
 
     Dialog(onDismissRequest = onDismiss) {
         Card(shape = RoundedCornerShape(20.dp)) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Prozente konfigurieren",
-                        fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                        modifier = Modifier.weight(1f))
+                    Text(
+                        "Mindestprozente",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        modifier = Modifier.weight(1f)
+                    )
                     IconButton(onClick = onReset) {
-                        Icon(Icons.Default.RestartAlt, contentDescription = "Zurücksetzen",
-                            tint = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            Icons.Default.RestartAlt,
+                            contentDescription = "Zurücksetzen",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
-                Text("Mindestprozente pro Note (${if (systemType == "1-6") "Klasse 1–10" else "Oberstufe"})",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (systemType == "1-6") "Klasse 1–10" else "Oberstufe",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(modifier = Modifier.height(12.dp))
 
                 LazyColumn(
-                    modifier = Modifier.heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier.heightIn(max = 430.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     items(config.size) { i ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(config[i].gradeLabel,
-                                modifier = Modifier.weight(1f),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium)
-                            OutlinedTextField(
-                                value = editableMin[i].value,
-                                onValueChange = { v ->
-                                    editableMin[i].value = v.filter { it.isDigit() }.take(3)
-                                    hasError = false
+                        val barColor = colors.getOrElse(i) { Color.Gray }
+                        val currentVal = sliderValues[i].floatValue.roundToInt()
+
+                        // Slider darf nicht über Schwelle der besseren Note steigen
+                        val upperLimit = if (i == 0) 100f
+                                         else (sliderValues[i - 1].floatValue.roundToInt() - 1)
+                                             .toFloat().coerceAtLeast(0f)
+                        // Slider darf nicht unter Schwelle der schlechteren Note fallen
+                        val lowerLimit = if (i == config.lastIndex) 0f
+                                         else (sliderValues[i + 1].floatValue.roundToInt() + 1)
+                                             .toFloat().coerceAtMost(100f)
+
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .background(barColor, RoundedCornerShape(2.dp))
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        config[i].gradeLabel,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                                // Prozentwert als gut lesbares Badge
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = barColor.copy(alpha = 0.15f)
+                                ) {
+                                    Text(
+                                        "ab $currentVal%",
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = barColor
+                                    )
+                                }
+                            }
+
+                            Slider(
+                                value = sliderValues[i].floatValue,
+                                onValueChange = { newVal ->
+                                    val clamped = newVal
+                                        .coerceAtLeast(lowerLimit)
+                                        .coerceAtMost(upperLimit)
+                                    sliderValues[i].floatValue = clamped.roundToInt().toFloat()
                                 },
-                                modifier = Modifier.width(72.dp),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                trailingIcon = { Text("%", fontSize = 12.sp) },
-                                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center),
-                                isError = editableMin[i].value.toIntOrNull().let { it == null || it < 0 || it > 100 }
+                                valueRange = 0f..100f,
+                                steps = 99,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = barColor,
+                                    activeTrackColor = barColor,
+                                    inactiveTrackColor = barColor.copy(alpha = 0.2f)
+                                )
                             )
                         }
                     }
                 }
 
-                if (hasError) {
-                    Text("Ungültige Werte – bitte 0–100 eingeben.",
-                        color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("Abbrechen") }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(onClick = {
-                        // Validieren
-                        val parsed = editableMin.map { it.value.toIntOrNull() }
-                        if (parsed.any { it == null || it < 0 || it > 100 }) {
-                            hasError = true
-                            return@Button
-                        }
-                        // Neue Config zusammenbauen
                         val newConfig = config.mapIndexed { i, entry ->
-                            val minPct = parsed[i]!! / 100.0
-                            // maxPct = minPct des vorherigen Eintrags - 0.01, oder 1.0 für den ersten
+                            val minPct = sliderValues[i].floatValue.roundToInt() / 100.0
                             val maxPct = if (i == 0) 1.00
-                                         else (parsed[i - 1]!! / 100.0) - 0.01
+                                         else (sliderValues[i - 1].floatValue.roundToInt() / 100.0) - 0.01
                             entry.copy(minPct = minPct, maxPct = maxPct.coerceAtLeast(minPct))
                         }
                         onSave(newConfig)
-                    }) { Text("Speichern") }
+                    }) {
+                        Text("Speichern")
+                    }
                 }
             }
         }
