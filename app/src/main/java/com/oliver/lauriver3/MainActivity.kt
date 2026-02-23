@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,10 +28,14 @@ import com.oliver.lauriver3.ui.theme.Lauriver3Theme
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 @Serializable
 data class AppVersion(
@@ -155,6 +158,8 @@ fun MainApp() {
 // ---------------------------------------------------------------------------
 // Update-Screen
 // ---------------------------------------------------------------------------
+enum class DownloadState { IDLE, DOWNLOADING, DONE, FAILED }
+
 @Composable
 fun UpdateScreen() {
     val context = LocalContext.current
@@ -170,16 +175,23 @@ fun UpdateScreen() {
     var latestVersion by remember { mutableStateOf<AppVersion?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-
-    // Download-Status
     var downloadState by remember { mutableStateOf(DownloadState.IDLE) }
-    var downloadId by remember { mutableStateOf(-1L) }
+    var downloadProgress by remember { mutableStateOf(0f) }
 
-    // Prüfen ob "Unbekannte Quellen" erlaubt ist
-    val canInstallUnknown = remember(downloadState) {
+    // Prüfen ob "Unbekannte Quellen" erlaubt ist – nach jedem Resume neu prüfen
+    var canInstallUnknown by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.packageManager.canRequestPackageInstalls()
+            else true
+        )
+    }
+
+    // Neu prüfen wenn der Screen rekomposiert wird (z.B. nach Rückkehr aus Einstellungen)
+    LaunchedEffect(downloadState) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.packageManager.canRequestPackageInstalls()
-        } else true
+            canInstallUnknown = context.packageManager.canRequestPackageInstalls()
+        }
     }
 
     fun checkForUpdate() {
@@ -199,42 +211,58 @@ fun UpdateScreen() {
         }
     }
 
-    // BroadcastReceiver: wenn Download fertig → sofort Install-Intent öffnen
-    DisposableEffect(Unit) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                val completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-                if (completedId != downloadId) return
+    fun startDownload(url: String, versionCode: Int) {
+        scope.launch {
+            downloadState = DownloadState.DOWNLOADING
+            downloadProgress = 0f
+            try {
+                // APK in internen Cache laden – FileProvider hat hier garantierten Zugriff
+                val apkFile = File(context.cacheDir, "lauriver-update-$versionCode.apk")
 
-                val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                val query = DownloadManager.Query().setFilterById(completedId)
-                val cursor = dm.query(query)
-                if (cursor.moveToFirst()) {
-                    val statusCol = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    if (statusCol >= 0 && cursor.getInt(statusCol) == DownloadManager.STATUS_SUCCESSFUL) {
-                        val uriCol = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-                        if (uriCol >= 0) {
-                            val localUri = cursor.getString(uriCol)
-                            val file = File(Uri.parse(localUri).path ?: "")
-                            installApk(ctx, file)
-                            downloadState = DownloadState.DONE
+                withContext(Dispatchers.IO) {
+                    val connection = URL(url).openConnection() as HttpURLConnection
+                    connection.connectTimeout = 15_000
+                    connection.readTimeout = 60_000
+                    connection.connect()
+
+                    val totalBytes = connection.contentLength.toLong()
+                    var downloadedBytes = 0L
+
+                    connection.inputStream.use { input ->
+                        apkFile.outputStream().use { output ->
+                            val buffer = ByteArray(8 * 1024)
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                downloadedBytes += bytesRead
+                                if (totalBytes > 0) {
+                                    withContext(Dispatchers.Main) {
+                                        downloadProgress = downloadedBytes.toFloat() / totalBytes
+                                    }
+                                }
+                            }
                         }
-                    } else {
-                        downloadState = DownloadState.FAILED
                     }
+                    connection.disconnect()
                 }
-                cursor.close()
+
+                // Prüfen ob die Datei eine echte APK ist (fängt mit "PK" = ZIP-Header)
+                val header = apkFile.inputStream().use { it.readNBytes(2) }
+                if (header.size < 2 || header[0] != 0x50.toByte() || header[1] != 0x4B.toByte()) {
+                    apkFile.delete()
+                    error = "Download-Fehler: Kein gültiger APK-Link. Bitte GitHub-Release-URL verwenden."
+                    downloadState = DownloadState.FAILED
+                    return@launch
+                }
+
+                downloadState = DownloadState.DONE
+                installApk(context, apkFile)
+
+            } catch (e: Exception) {
+                downloadState = DownloadState.FAILED
+                error = "Download fehlgeschlagen: ${e.message?.take(80)}"
             }
         }
-
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, filter)
-        }
-
-        onDispose { context.unregisterReceiver(receiver) }
     }
 
     LaunchedEffect(Unit) { checkForUpdate() }
@@ -278,7 +306,7 @@ fun UpdateScreen() {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Hinweis: "Unbekannte Quellen" nicht erlaubt
+        // Warnung: Berechtigung fehlt
         if (!canInstallUnknown) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -292,19 +320,22 @@ fun UpdateScreen() {
                             tint = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Installation aus unbekannten Quellen nicht erlaubt",
+                        Text(
+                            "Installation aus unbekannten Quellen nicht erlaubt",
                             fontWeight = FontWeight.Medium, fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer)
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                    Uri.parse("package:${context.packageName}")
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
                                 )
-                                context.startActivity(intent)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -326,7 +357,7 @@ fun UpdateScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
-            error != null -> {
+            error != null && downloadState != DownloadState.FAILED -> {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -394,10 +425,14 @@ fun UpdateScreen() {
                                 DownloadState.IDLE -> {
                                     Button(
                                         onClick = {
-                                            downloadState = DownloadState.DOWNLOADING
-                                            downloadId = startDownload(
-                                                context, latest.apkUrl!!, latest.versionCode
-                                            )
+                                            // Berechtigung nochmal aktuell prüfen
+                                            canInstallUnknown = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                                                context.packageManager.canRequestPackageInstalls()
+                                            else true
+
+                                            if (canInstallUnknown) {
+                                                startDownload(latest.apkUrl!!, latest.versionCode)
+                                            }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         enabled = canInstallUnknown
@@ -415,40 +450,64 @@ fun UpdateScreen() {
                                         )
                                     }
                                 }
+
                                 DownloadState.DOWNLOADING -> {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        CircularProgressIndicator(modifier = Modifier.size(20.dp),
-                                            strokeWidth = 2.dp)
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Text("Wird heruntergeladen...", fontSize = 14.sp)
+                                    Text("Wird heruntergeladen...", fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    if (downloadProgress > 0f) {
+                                        LinearProgressIndicator(
+                                            progress = { downloadProgress },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "${(downloadProgress * 100).toInt()}%",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                                     }
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        "Die Installation startet automatisch wenn der Download fertig ist.",
+                                        "Die Installation öffnet sich automatisch danach.",
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+
                                 DownloadState.DONE -> {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.CheckCircle,
-                                            contentDescription = null,
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null,
                                             tint = MaterialTheme.colorScheme.tertiary)
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Download abgeschlossen – Installer geöffnet.",
+                                        Text("Download fertig – Installer wurde geöffnet.",
                                             fontSize = 14.sp)
                                     }
                                 }
+
                                 DownloadState.FAILED -> {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Error, contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Download fehlgeschlagen.", fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.error)
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Error, contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Download fehlgeschlagen.", fontSize = 14.sp,
+                                                color = MaterialTheme.colorScheme.error)
+                                        }
+                                        if (error != null) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(error!!, fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        OutlinedButton(
+                                            onClick = { startDownload(latest.apkUrl!!, latest.versionCode) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("Erneut versuchen")
+                                        }
                                     }
                                 }
                             }
@@ -470,30 +529,8 @@ fun UpdateScreen() {
     }
 }
 
-enum class DownloadState { IDLE, DOWNLOADING, DONE, FAILED }
-
 // ---------------------------------------------------------------------------
-// Download starten – gibt die DownloadManager-ID zurück
-// ---------------------------------------------------------------------------
-fun startDownload(context: Context, url: String, versionCode: Int): Long {
-    val request = DownloadManager.Request(Uri.parse(url)).apply {
-        setTitle("Lauriver Update – Version $versionCode")
-        setDescription("APK wird heruntergeladen...")
-        setNotificationVisibility(
-            DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-        )
-        setDestinationInExternalPublicDir(
-            Environment.DIRECTORY_DOWNLOADS,
-            "lauriver-$versionCode.apk"
-        )
-        setMimeType("application/vnd.android.package-archive")
-    }
-    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-    return dm.enqueue(request)
-}
-
-// ---------------------------------------------------------------------------
-// APK installieren via FileProvider (funktioniert ab Android 7+)
+// APK installieren via FileProvider – direkt aus internem Cache
 // ---------------------------------------------------------------------------
 fun installApk(context: Context, file: File) {
     val uri = FileProvider.getUriForFile(

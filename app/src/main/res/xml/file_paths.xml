@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
+    <!-- Interner Cache: hier landet die APK, FileProvider hat garantierten Zugriff -->
+    <cache-path
+        name="apk_cache"
+        path="." />
+    <!-- Externer Speicher als Fallback -->
     <external-path
         name="external_files"
         path="." />
