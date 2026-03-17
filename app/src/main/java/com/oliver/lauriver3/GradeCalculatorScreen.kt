@@ -33,7 +33,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,7 +65,6 @@ data class ProfileEntry(
     @SerialName("max_pct") val maxPct: Double
 )
 
-// Typsichere Insert/Update-Klassen statt mapOf<String, Any>
 @Serializable
 data class GradeProfileInsert(
     val name: String,
@@ -136,11 +134,41 @@ private val FALLBACK_CONFIG_0_15 = listOf(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Berechnet lückenlose Notenbereiche aus den Konfigurationseinträgen.
+ *
+ * Jede Note beginnt bei ceil(minPct × maxPoints).
+ * Das Maximum einer Note ist immer (Minimum der nächst-besseren Note) - 1,
+ * niemals aus maxPct abgeleitet — das verhindert Lücken und Überlappungen
+ * durch Rundungseffekte bei beliebiger Gesamtpunktzahl.
+ *
+ * Beispiel: 31 Punkte, Note 4 ab 45%, Note 3 ab 59%
+ *   Note 4 minPts = ceil(0.45 × 31) = ceil(13.95) = 14
+ *   Note 3 minPts = ceil(0.59 × 31) = ceil(18.29) = 19
+ *   Note 4 maxPts = 19 - 1 = 18  ← korrekt, keine Lücke
+ */
 fun configToRanges(config: List<GradeConfigEntry>, maxPoints: Int, colors: List<Color>): List<GradeRange> {
+    if (config.isEmpty()) return emptyList()
+
+    // Schritt 1: minPts für jede Note berechnen
+    // config ist sortiert von bester zu schlechtester Note (höchstes minPct zuerst)
+    val minPtsPerGrade = config.map { entry ->
+        ceil(entry.minPct * maxPoints).toInt().coerceAtLeast(0)
+    }
+
+    // Schritt 2: GradeRange-Liste aufbauen — maxPts immer aus dem minPts der nächst-besseren Note
     return config.mapIndexed { i, entry ->
-        val minPts = ceil(entry.minPct * maxPoints).toInt()
-        val maxPts = floor(entry.maxPct * maxPoints).toInt()
-        GradeRange(entry.gradeLabel, minPts, maxPts.coerceAtLeast(minPts), colors.getOrElse(i) { Color.Gray })
+        val minPts = minPtsPerGrade[i]
+        val maxPts = when (i) {
+            0    -> maxPoints                    // Beste Note geht bis zur Gesamtpunktzahl
+            else -> minPtsPerGrade[i - 1] - 1   // Alle anderen: Grenze der besseren Note minus 1
+        }
+        GradeRange(
+            grade     = entry.gradeLabel,
+            minPoints = minPts,
+            maxPoints = maxPts.coerceAtLeast(minPts), // Sicherheitsnet, sollte nie nötig sein
+            color     = colors.getOrElse(i) { Color.Gray }
+        )
     }
 }
 
@@ -188,8 +216,8 @@ fun GradeCalculatorScreen() {
                 val all = supabase.from("grade_config")
                     .select()
                     .decodeList<GradeConfigEntry>()
-                val c16  = all.filter { it.systemType == "1-6" }
-                val c015 = all.filter { it.systemType == "0-15" }
+                val c16  = all.filter { it.systemType == "1-6" }.sortedByDescending { it.minPct }
+                val c015 = all.filter { it.systemType == "0-15" }.sortedByDescending { it.minPct }
                 if (c16.isNotEmpty())  config1_6  = c16
                 if (c015.isNotEmpty()) config0_15 = c015
             } catch (_: Exception) { /* Fallback bleibt */ }
@@ -367,6 +395,7 @@ fun GradeCalculatorScreen() {
                         val dbDefaults = supabase.from("grade_config")
                             .select { filter { eq("system_type", selectedSystem) } }
                             .decodeList<GradeConfigEntry>()
+                            .sortedByDescending { it.minPct }
                         if (dbDefaults.isNotEmpty()) {
                             if (selectedSystem == "1-6") config1_6  = dbDefaults
                             else                         config0_15 = dbDefaults
@@ -590,8 +619,10 @@ fun LoadProfileDialog(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     TextButton(onClick = {
-                                        val loaded = try { jsonArrayToConfig(systemType, profile.entries) }
-                                                     catch (_: Exception) { emptyList() }
+                                        val loaded = try {
+                                            jsonArrayToConfig(systemType, profile.entries)
+                                                .sortedByDescending { it.minPct }
+                                        } catch (_: Exception) { emptyList() }
                                         if (loaded.isNotEmpty()) onLoaded(profile, loaded)
                                     }) { Text("Laden") }
                                     IconButton(onClick = { deleteTarget = profile },
@@ -726,6 +757,8 @@ fun GradeConfigDialog(
                     Button(onClick = {
                         val newConfig = config.mapIndexed { i, entry ->
                             val minPct = sliderValues[i].floatValue.roundToInt() / 100.0
+                            // maxPct wird nur noch als Richtwert gespeichert;
+                            // die Anzeige nutzt ausschließlich minPct der nächsten Note
                             val maxPct = if (i == 0) 1.00
                                          else (sliderValues[i - 1].floatValue.roundToInt() / 100.0) - 0.01
                             entry.copy(minPct = minPct, maxPct = maxPct.coerceAtLeast(minPct))
