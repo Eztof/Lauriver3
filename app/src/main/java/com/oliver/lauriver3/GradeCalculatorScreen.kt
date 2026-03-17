@@ -54,17 +54,30 @@ data class GradeProfile(
     val id: String = "",
     val name: String,
     @SerialName("system_type") val systemType: String,
-    val entries: JsonArray,           // JSONB-Feld aus Supabase
+    val entries: JsonArray,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null
 )
 
-// Lokale Profil-Eintrags-Liste (deserialisiert aus JsonArray)
 @Serializable
 data class ProfileEntry(
     @SerialName("grade_label") val gradeLabel: String,
     @SerialName("min_pct") val minPct: Double,
     @SerialName("max_pct") val maxPct: Double
+)
+
+// Typsichere Insert/Update-Klassen statt mapOf<String, Any>
+@Serializable
+data class GradeProfileInsert(
+    val name: String,
+    @SerialName("system_type") val systemType: String,
+    val entries: JsonArray
+)
+
+@Serializable
+data class GradeProfileUpdate(
+    val entries: JsonArray,
+    @SerialName("updated_at") val updatedAt: String
 )
 
 data class GradeRange(
@@ -75,7 +88,7 @@ data class GradeRange(
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Farben & Defaults
+// Farben & Fallback-Defaults (nur bei Offline-Start genutzt)
 // ─────────────────────────────────────────────────────────────────────────────
 
 val COLORS_1_6 = listOf(
@@ -91,16 +104,16 @@ val COLORS_0_15 = listOf(
     Color(0xFF4A148C)
 )
 
-val DEFAULT_CONFIG_1_6 = listOf(
-    GradeConfigEntry(systemType = "1-6", gradeLabel = "1 – sehr gut",     minPct = 0.96, maxPct = 1.00),
-    GradeConfigEntry(systemType = "1-6", gradeLabel = "2 – gut",          minPct = 0.80, maxPct = 0.95),
-    GradeConfigEntry(systemType = "1-6", gradeLabel = "3 – befriedigend", minPct = 0.60, maxPct = 0.79),
-    GradeConfigEntry(systemType = "1-6", gradeLabel = "4 – ausreichend",  minPct = 0.45, maxPct = 0.59),
-    GradeConfigEntry(systemType = "1-6", gradeLabel = "5 – mangelhaft",   minPct = 0.16, maxPct = 0.44),
-    GradeConfigEntry(systemType = "1-6", gradeLabel = "6 – ungenügend",   minPct = 0.00, maxPct = 0.15),
+private val FALLBACK_CONFIG_1_6 = listOf(
+    GradeConfigEntry(systemType = "1-6", gradeLabel = "1 – sehr gut",     minPct = 0.87, maxPct = 1.00),
+    GradeConfigEntry(systemType = "1-6", gradeLabel = "2 – gut",          minPct = 0.73, maxPct = 0.86),
+    GradeConfigEntry(systemType = "1-6", gradeLabel = "3 – befriedigend", minPct = 0.59, maxPct = 0.72),
+    GradeConfigEntry(systemType = "1-6", gradeLabel = "4 – ausreichend",  minPct = 0.45, maxPct = 0.58),
+    GradeConfigEntry(systemType = "1-6", gradeLabel = "5 – mangelhaft",   minPct = 0.18, maxPct = 0.44),
+    GradeConfigEntry(systemType = "1-6", gradeLabel = "6 – ungenügend",   minPct = 0.00, maxPct = 0.17),
 )
 
-val DEFAULT_CONFIG_0_15 = listOf(
+private val FALLBACK_CONFIG_0_15 = listOf(
     GradeConfigEntry(systemType = "0-15", gradeLabel = "15 – 1+", minPct = 0.95, maxPct = 1.00),
     GradeConfigEntry(systemType = "0-15", gradeLabel = "14 – 1",  minPct = 0.90, maxPct = 0.94),
     GradeConfigEntry(systemType = "0-15", gradeLabel = "13 – 1−", minPct = 0.85, maxPct = 0.89),
@@ -131,13 +144,14 @@ fun configToRanges(config: List<GradeConfigEntry>, maxPoints: Int, colors: List<
     }
 }
 
-fun configToProfileEntries(config: List<GradeConfigEntry>): String {
+fun configToJsonArray(config: List<GradeConfigEntry>): JsonArray {
     val entries = config.map { ProfileEntry(it.gradeLabel, it.minPct, it.maxPct) }
-    return Json.encodeToString(entries)
+    val jsonString = Json.encodeToString(entries)
+    return Json.decodeFromString(jsonString)
 }
 
-fun profileEntriesToConfig(systemType: String, jsonArray: JsonArray): List<GradeConfigEntry> {
-    return jsonArray.mapIndexed { _, element ->
+fun jsonArrayToConfig(systemType: String, jsonArray: JsonArray): List<GradeConfigEntry> {
+    return jsonArray.map { element ->
         val entry = Json.decodeFromJsonElement<ProfileEntry>(element)
         GradeConfigEntry(systemType = systemType, gradeLabel = entry.gradeLabel,
             minPct = entry.minPct, maxPct = entry.maxPct)
@@ -155,21 +169,21 @@ fun GradeCalculatorScreen() {
     var selectedSystem by remember { mutableStateOf("1-6") }
     var gradeRanges by remember { mutableStateOf<List<GradeRange>>(emptyList()) }
 
-    var config1_6  by remember { mutableStateOf(DEFAULT_CONFIG_1_6) }
-    var config0_15 by remember { mutableStateOf(DEFAULT_CONFIG_0_15) }
+    var config1_6  by remember { mutableStateOf(FALLBACK_CONFIG_1_6) }
+    var config0_15 by remember { mutableStateOf(FALLBACK_CONFIG_0_15) }
+    var isLoadingDefaults by remember { mutableStateOf(true) }
 
     var showConfigDialog  by remember { mutableStateOf(false) }
     var showSaveDialog    by remember { mutableStateOf(false) }
     var showLoadDialog    by remember { mutableStateOf(false) }
+    var activeProfileName by remember { mutableStateOf<String?>(null) }
 
     val currentConfig = if (selectedSystem == "1-6") config1_6 else config0_15
     val currentColors = if (selectedSystem == "1-6") COLORS_1_6 else COLORS_0_15
 
-    // Aktiv geladenes Profil (nur zur Anzeige)
-    var activeProfileName by remember { mutableStateOf<String?>(null) }
-
     fun loadDefaultsFromDb() {
         scope.launch {
+            isLoadingDefaults = true
             try {
                 val all = supabase.from("grade_config")
                     .select()
@@ -178,7 +192,8 @@ fun GradeCalculatorScreen() {
                 val c015 = all.filter { it.systemType == "0-15" }
                 if (c16.isNotEmpty())  config1_6  = c16
                 if (c015.isNotEmpty()) config0_15 = c015
-            } catch (_: Exception) {}
+            } catch (_: Exception) { /* Fallback bleibt */ }
+            isLoadingDefaults = false
         }
     }
 
@@ -188,7 +203,6 @@ fun GradeCalculatorScreen() {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // System-Auswahl
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -217,7 +231,10 @@ fun GradeCalculatorScreen() {
             }
         }
 
-        // Aktives Profil-Badge
+        if (isLoadingDefaults) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp))
+        }
+
         if (activeProfileName != null) {
             Surface(
                 color = MaterialTheme.colorScheme.secondaryContainer,
@@ -232,17 +249,13 @@ fun GradeCalculatorScreen() {
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.onSecondaryContainer)
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        "Profil: $activeProfileName",
-                        fontSize = 13.sp,
+                    Text("Profil: $activeProfileName", fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        fontWeight = FontWeight.Medium
-                    )
+                        fontWeight = FontWeight.Medium)
                 }
             }
         }
 
-        // Maximale Punktzahl
         OutlinedTextField(
             value = maxPointsText,
             onValueChange = { v -> maxPointsText = v.filter { it.isDigit() } },
@@ -255,45 +268,29 @@ fun GradeCalculatorScreen() {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Aktions-Leiste: Berechnen | Konfigurieren | Speichern | Laden
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
                 onClick = {
                     val max = maxPointsText.toIntOrNull() ?: return@Button
                     gradeRanges = configToRanges(currentConfig, max, currentColors)
                 },
                 modifier = Modifier.weight(1f),
-                enabled = maxPointsText.isNotBlank()
+                enabled = maxPointsText.isNotBlank() && !isLoadingDefaults
             ) {
                 Text("Berechnen", fontWeight = FontWeight.SemiBold)
             }
-            // Konfigurieren
-            OutlinedButton(
-                onClick = { showConfigDialog = true },
-                modifier = Modifier.size(48.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) {
+            OutlinedButton(onClick = { showConfigDialog = true },
+                modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) {
                 Icon(Icons.Default.Edit, contentDescription = "Konfigurieren",
                     modifier = Modifier.size(20.dp))
             }
-            // Profil speichern
-            OutlinedButton(
-                onClick = { showSaveDialog = true },
-                modifier = Modifier.size(48.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) {
+            OutlinedButton(onClick = { showSaveDialog = true },
+                modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) {
                 Icon(Icons.Default.BookmarkAdd, contentDescription = "Profil speichern",
                     modifier = Modifier.size(20.dp))
             }
-            // Profil laden
-            OutlinedButton(
-                onClick = { showLoadDialog = true },
-                modifier = Modifier.size(48.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) {
+            OutlinedButton(onClick = { showLoadDialog = true },
+                modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) {
                 Icon(Icons.Default.FolderOpen, contentDescription = "Profil laden",
                     modifier = Modifier.size(20.dp))
             }
@@ -301,7 +298,6 @@ fun GradeCalculatorScreen() {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Ergebnis-Tabelle
         if (gradeRanges.isNotEmpty()) {
             val maxPoints = maxPointsText.toInt()
             Row(
@@ -344,7 +340,6 @@ fun GradeCalculatorScreen() {
         }
     }
 
-    // ── Konfigurieren-Dialog ──────────────────────────────────────────────────
     if (showConfigDialog) {
         GradeConfigDialog(
             config     = currentConfig,
@@ -368,17 +363,19 @@ fun GradeCalculatorScreen() {
             },
             onReset    = {
                 scope.launch {
-                    val defaults = if (selectedSystem == "1-6") DEFAULT_CONFIG_1_6 else DEFAULT_CONFIG_0_15
                     try {
-                        supabase.from("grade_config")
-                            .delete { filter { eq("system_type", selectedSystem) } }
-                        supabase.from("grade_config").insert(defaults)
-                        if (selectedSystem == "1-6") config1_6  = defaults
-                        else                         config0_15 = defaults
+                        val dbDefaults = supabase.from("grade_config")
+                            .select { filter { eq("system_type", selectedSystem) } }
+                            .decodeList<GradeConfigEntry>()
+                        if (dbDefaults.isNotEmpty()) {
+                            if (selectedSystem == "1-6") config1_6  = dbDefaults
+                            else                         config0_15 = dbDefaults
+                        }
                         activeProfileName = null
-                        val max = maxPointsText.toIntOrNull()
+                        val conf = if (selectedSystem == "1-6") config1_6 else config0_15
+                        val max  = maxPointsText.toIntOrNull()
                         if (max != null && gradeRanges.isNotEmpty())
-                            gradeRanges = configToRanges(defaults, max, currentColors)
+                            gradeRanges = configToRanges(conf, max, currentColors)
                     } catch (_: Exception) {}
                 }
                 showConfigDialog = false
@@ -386,20 +383,15 @@ fun GradeCalculatorScreen() {
         )
     }
 
-    // ── Profil speichern ─────────────────────────────────────────────────────
     if (showSaveDialog) {
         SaveProfileDialog(
             systemType    = selectedSystem,
             currentConfig = currentConfig,
             onDismiss     = { showSaveDialog = false },
-            onSaved       = { name ->
-                activeProfileName = name
-                showSaveDialog = false
-            }
+            onSaved       = { name -> activeProfileName = name; showSaveDialog = false }
         )
     }
 
-    // ── Profil laden ─────────────────────────────────────────────────────────
     if (showLoadDialog) {
         LoadProfileDialog(
             systemType = selectedSystem,
@@ -434,7 +426,6 @@ fun SaveProfileDialog(
     var isSaving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // Bestehende Profile für Überschreiben laden
     LaunchedEffect(Unit) {
         try {
             existingProfiles = supabase.from("grade_profiles")
@@ -451,15 +442,13 @@ fun SaveProfileDialog(
         Card(shape = RoundedCornerShape(20.dp)) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text("Profil speichern", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text(
-                    if (systemType == "1-6") "Klasse 1–10" else "Oberstufe",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(if (systemType == "1-6") "Klasse 1–10" else "Oberstufe",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
 
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = it; error = null },
                     label = { Text("Profilname") },
                     placeholder = { Text("z.B. Mathe Abschluss") },
                     singleLine = true,
@@ -469,16 +458,12 @@ fun SaveProfileDialog(
 
                 if (matchingProfile != null) {
                     Spacer(Modifier.height(6.dp))
-                    Surface(
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            "⚠ Profil \"${matchingProfile.name}\" wird überschrieben",
+                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = RoundedCornerShape(8.dp)) {
+                        Text("⚠ Profil \"${matchingProfile.name}\" wird überschrieben",
                             fontSize = 12.sp,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            color = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
+                            color = MaterialTheme.colorScheme.onTertiaryContainer)
                     }
                 }
 
@@ -499,28 +484,27 @@ fun SaveProfileDialog(
                             error = null
                             scope.launch {
                                 try {
-                                    val entriesJson = configToProfileEntries(currentConfig)
+                                    val entriesArray = configToJsonArray(currentConfig)
                                     if (matchingProfile != null) {
-                                        // Überschreiben via update
                                         supabase.from("grade_profiles").update(
-                                            mapOf(
-                                                "entries"    to kotlinx.serialization.json.Json.parseToJsonElement(entriesJson),
-                                                "updated_at" to java.time.Instant.now().toString()
+                                            GradeProfileUpdate(
+                                                entries   = entriesArray,
+                                                updatedAt = java.time.Instant.now().toString()
                                             )
                                         ) { filter { eq("id", matchingProfile.id) } }
                                     } else {
-                                        // Neues Profil
-                                        val insertMap = mapOf(
-                                            "name"        to trimmed,
-                                            "system_type" to systemType,
-                                            "entries"     to kotlinx.serialization.json.Json.parseToJsonElement(entriesJson)
+                                        supabase.from("grade_profiles").insert(
+                                            GradeProfileInsert(
+                                                name       = trimmed,
+                                                systemType = systemType,
+                                                entries    = entriesArray
+                                            )
                                         )
-                                        supabase.from("grade_profiles").insert(insertMap)
                                     }
                                     isSaving = false
                                     onSaved(trimmed)
                                 } catch (e: Exception) {
-                                    error = "Fehler: ${e.message?.take(60)}"
+                                    error = "Fehler: ${e.message?.take(80)}"
                                     isSaving = false
                                 }
                             }
@@ -563,8 +547,7 @@ fun LoadProfileDialog(
                 profiles = supabase.from("grade_profiles")
                     .select { filter { eq("system_type", systemType) } }
                     .decodeList<GradeProfile>()
-                    .sortedBy { it.updatedAt ?: it.createdAt ?: "" }
-                    .reversed()
+                    .sortedByDescending { it.updatedAt ?: it.createdAt ?: "" }
             } catch (e: Exception) {
                 error = e.message?.take(80)
             }
@@ -578,79 +561,44 @@ fun LoadProfileDialog(
         Card(shape = RoundedCornerShape(20.dp)) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text("Profil laden", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text(
-                    if (systemType == "1-6") "Klasse 1–10" else "Oberstufe",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(if (systemType == "1-6") "Klasse 1–10" else "Oberstufe",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
 
                 when {
-                    isLoading -> Box(
-                        Modifier.fillMaxWidth().height(80.dp),
-                        contentAlignment = Alignment.Center
-                    ) { CircularProgressIndicator() }
-
-                    error != null -> Text(
-                        "Fehler: $error",
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 13.sp
-                    )
-
-                    profiles.isEmpty() -> Text(
-                        "Noch keine Profile gespeichert.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 14.sp
-                    )
-
+                    isLoading -> Box(Modifier.fillMaxWidth().height(80.dp),
+                        contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    error != null -> Text("Fehler: $error",
+                        color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                    profiles.isEmpty() -> Text("Noch keine Profile gespeichert.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                     else -> LazyColumn(
                         modifier = Modifier.heightIn(max = 380.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(profiles, key = { it.id }) { profile ->
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
+                            Surface(shape = RoundedCornerShape(12.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                                modifier = Modifier.fillMaxWidth()) {
+                                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            profile.name,
-                                            fontWeight = FontWeight.SemiBold,
-                                            fontSize = 15.sp
-                                        )
-                                        val entries = try {
-                                            profileEntriesToConfig(systemType, profile.entries)
-                                        } catch (_: Exception) { emptyList() }
-                                        Text(
-                                            "${entries.size} Noten",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                        Text(profile.name, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                        val count = try { jsonArrayToConfig(systemType, profile.entries).size }
+                                                    catch (_: Exception) { 0 }
+                                        Text("$count Noten", fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    // Laden-Button
-                                    TextButton(
-                                        onClick = {
-                                            val loadedConfig = try {
-                                                profileEntriesToConfig(systemType, profile.entries)
-                                            } catch (_: Exception) { emptyList() }
-                                            if (loadedConfig.isNotEmpty()) onLoaded(profile, loadedConfig)
-                                        }
-                                    ) { Text("Laden") }
-                                    // Löschen-Button
-                                    IconButton(
-                                        onClick = { deleteTarget = profile },
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = "Löschen",
+                                    TextButton(onClick = {
+                                        val loaded = try { jsonArrayToConfig(systemType, profile.entries) }
+                                                     catch (_: Exception) { emptyList() }
+                                        if (loaded.isNotEmpty()) onLoaded(profile, loaded)
+                                    }) { Text("Laden") }
+                                    IconButton(onClick = { deleteTarget = profile },
+                                        modifier = Modifier.size(36.dp)) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Löschen",
                                             tint = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                                            modifier = Modifier.size(18.dp))
                                     }
                                 }
                             }
@@ -666,7 +614,6 @@ fun LoadProfileDialog(
         }
     }
 
-    // Lösch-Bestätigungs-Dialog
     deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
@@ -693,7 +640,7 @@ fun LoadProfileDialog(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Konfigurierungs-Dialog (unverändert, nur leichte Bereinigung)
+// Konfigurierungs-Dialog
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -713,27 +660,19 @@ fun GradeConfigDialog(
         Card(shape = RoundedCornerShape(20.dp)) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Mindestprozente",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Text("Mindestprozente", fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                        modifier = Modifier.weight(1f))
                     IconButton(onClick = onReset) {
                         Icon(Icons.Default.RestartAlt, contentDescription = "Zurücksetzen",
                             tint = MaterialTheme.colorScheme.primary)
                     }
                 }
-                Text(
-                    if (systemType == "1-6") "Klasse 1–10" else "Oberstufe",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(if (systemType == "1-6") "Klasse 1–10" else "Oberstufe",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(12.dp))
 
-                LazyColumn(
-                    modifier = Modifier.heightIn(max = 430.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
-                ) {
+                LazyColumn(modifier = Modifier.heightIn(max = 430.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     items(config.size) { i ->
                         val barColor   = colors.getOrElse(i) { Color.Gray }
                         val currentVal = sliderValues[i].floatValue.roundToInt()
@@ -743,13 +682,10 @@ fun GradeConfigDialog(
                         val lowerLimit = if (i == config.lastIndex) 0f
                                          else (sliderValues[i + 1].floatValue.roundToInt() + 1)
                                              .toFloat().coerceAtMost(100f)
-
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
+                            Row(modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
+                                horizontalArrangement = Arrangement.SpaceBetween) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(modifier = Modifier.size(10.dp)
                                         .background(barColor, RoundedCornerShape(2.dp)))
@@ -757,17 +693,11 @@ fun GradeConfigDialog(
                                     Text(config[i].gradeLabel, fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium)
                                 }
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = barColor.copy(alpha = 0.15f)
-                                ) {
-                                    Text(
-                                        "ab $currentVal%",
+                                Surface(shape = RoundedCornerShape(8.dp),
+                                    color = barColor.copy(alpha = 0.15f)) {
+                                    Text("ab $currentVal%",
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = barColor
-                                    )
+                                        fontSize = 15.sp, fontWeight = FontWeight.Bold, color = barColor)
                                 }
                             }
                             Slider(
@@ -801,9 +731,7 @@ fun GradeConfigDialog(
                             entry.copy(minPct = minPct, maxPct = maxPct.coerceAtLeast(minPct))
                         }
                         onSave(newConfig)
-                    }) {
-                        Text("Speichern")
-                    }
+                    }) { Text("Speichern") }
                 }
             }
         }
